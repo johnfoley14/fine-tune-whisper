@@ -1,27 +1,27 @@
 # Core ML
-torch
-transformers
-accelerate
-safetensors
-sentencepiece
-peft
+torch==2.8.0
+transformers==4.57.0
+accelerate==1.10.1
+safetensors==0.6.2
+sentencepiece==0.2.1
+peft==0.17.1
 
 # Data + audio processing
-datasets[audio]
-librosa
-soundfile
-pydub
-pyarrow
-numpy
-tqdm
+datasets==2.19.1
+librosa==0.11.0
+soundfile==0.13.1
+pydub==0.25.1
+pyarrow==21.0.0
+numpy==2.3.3
+tqdm==4.67.1
 
 # Evaluation
-evaluate
-jiwer
+evaluate==0.4.6
+jiwer==4.0.0
 
 # Data source
-kagglehub
+kagglehub==0.3.13
 
 # Misc fixes
-protobuf
-typing-extensions
+protobuf==6.32.1
+typing_extensions==4.15.0
