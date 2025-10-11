@@ -1,0 +1,5 @@
+.venv
+processed_dataset
+wandb
+checkpoints
+fine_tuned_whisper

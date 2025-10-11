@@ -1,0 +1,27 @@
+# Core ML
+torch
+transformers
+accelerate
+safetensors
+sentencepiece
+peft
+
+# Data + audio processing
+datasets[audio]
+librosa
+soundfile
+pydub
+pyarrow
+numpy
+tqdm
+
+# Evaluation
+evaluate
+jiwer
+
+# Data source
+kagglehub
+
+# Misc fixes
+protobuf
+typing-extensions
