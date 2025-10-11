@@ -3,6 +3,7 @@ from peft import get_peft_model, LoraConfig, prepare_model_for_kbit_training
 import wandb, torch
 from data_collator import DataCollatorSpeechSeq2SeqWithPadding
 from prepare_dataset import AudioTextDataset
+from test_utils import evaluate_model
 
 # Load the processor for feature extraction and tokenization --- feature extractor maps raw audio to mel spectrogram
 processor = WhisperProcessor.from_pretrained("openai/whisper-tiny")
@@ -76,21 +77,6 @@ trainer = Seq2SeqTrainer(
 # Disable caching to avoid warnings during training (re-enable for inference)
 model.config.use_cache = False
 
-def test_model(model, dataloader, device):
-    model.eval()
-    total_loss = 0
-    total_samples = 0
-    for batch in dataloader:
-        # Move everything to device
-        batch = {k: v.to(device) for k, v in batch.items()}
-        with torch.no_grad():
-            # Do NOT pass labels=labels separately
-            outputs = model(**batch)
-            # Loss is already computed internally
-            total_loss += outputs.loss.item() * batch["labels"].size(0)
-            total_samples += batch["labels"].size(0)
-    return total_loss / total_samples
-
 # === Load test dataset ===
 test_dataset = AudioTextDataset(json_path="processed_dataset/test.json", processor=processor)
 
@@ -102,8 +88,8 @@ test_loader = torch.utils.data.DataLoader(
 )
 
 # === Evaluate before training ===
-pre_train_loss = test_model(model, test_loader, device)
-print(f"Test loss before fine-tuning: {pre_train_loss:.4f}")
+pre_loss, pre_wer = evaluate_model(model, test_loader, processor, device)
+print(f"Before fine-tuning → Loss: {pre_loss:.4f}, WER: {pre_wer:.3f}")
 
 # === Training ===
 trainer.train()
@@ -115,5 +101,5 @@ processor.save_pretrained(save_dir)
 print(f"Model and processor saved to {save_dir}")
 
 # === Evaluate after training ===
-post_train_loss = test_model(model, test_loader, device)
-print(f"Test loss after fine-tuning: {post_train_loss:.4f}")
+post_loss, post_wer = evaluate_model(model, test_loader, processor, device)
+print(f"After fine-tuning → Loss: {post_loss:.4f}, WER: {post_wer:.3f}")
