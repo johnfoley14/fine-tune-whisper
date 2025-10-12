@@ -1,9 +1,14 @@
 from transformers import WhisperProcessor, WhisperForConditionalGeneration, Seq2SeqTrainingArguments, Seq2SeqTrainer
 from peft import get_peft_model, LoraConfig, prepare_model_for_kbit_training
-import wandb, torch
+import wandb, torch, argparse
 from data_collator import DataCollatorSpeechSeq2SeqWithPadding
 from prepare_dataset import AudioTextDataset
 from test_utils import evaluate_model
+
+# parse cmd line args
+parser = argparse.ArgumentParser(description="Fine-tune Whisper model with LoRA or full finetuning")
+parser.add_argument("--mode", choices=["lora", "full"], default="lora", help="Choose 'lora' for LoRA fine-tuning or 'full' for full model fine-tuning")
+args = parser.parse_args()
 
 # Load the processor for feature extraction and tokenization --- feature extractor maps raw audio to mel spectrogram
 processor = WhisperProcessor.from_pretrained("openai/whisper-tiny")
@@ -19,10 +24,11 @@ wandb.init(
 # Define training hyperparameters and settings
 training_args = Seq2SeqTrainingArguments(
     output_dir="checkpoints",  # Directory to save model checkpoints
-    per_device_train_batch_size=8,  # Batch size per GPU
-    gradient_accumulation_steps=1,  # Accumulate gradients for effective batch size
-    learning_rate=1e-3,  # Learning rate
-    warmup_steps=0,  # Number of warmup steps for learning rate scheduler
+    per_device_train_batch_size=1,  # Batch size per GPU, adjust as required
+    gradient_accumulation_steps=8,  # Accumulate gradients for effective batch size, adjust as required
+    learning_rate=1e-5,  # Learning rate
+    warmup_steps=100,  # Number of warmup steps for learning rate scheduler,
+    # max_steps=10, # Override num_train_epochs for a quick test run (REMOVE THIS LINE FOR ACTUAL TRAINING)
     num_train_epochs=3,  # Total number of training epochs
     eval_strategy="steps",  # Evaluate every few steps
     logging_strategy="steps",  # Log every few steps
@@ -31,33 +37,47 @@ training_args = Seq2SeqTrainingArguments(
     eval_steps=500,  # Run evaluation every 500 steps
     report_to=["wandb"],  # Log metrics to Weights & Biases
     fp16=False,  # Use mixed-precision (FP16) training
-    bf16=True,  # Use mixed-precision (FP16) training --- IGNORE ---
-    per_device_eval_batch_size=8,  # Batch size for evaluation
+    bf16=False,  # Use mixed-precision (FP16) training --- IGNORE --- NOT ALL GPUS SUPPORT BF16
+    per_device_eval_batch_size=1,  # Batch size for evaluation
     generation_max_length=128,  # Max length for generation during eval
-    logging_steps=1,  # Log every step
+    logging_steps=10,  # Log every 10 steps
     remove_unused_columns=False,  # Needed for PEFT since forward signature is modified
     label_names=["labels"],  # Tells Trainer to pass labels explicitly
 )
 
-device = "mps" if torch.backends.mps.is_available() else "cpu" # MPS (metal performance shaders) for Mac GPUs, else "cpu"
+device = "mps" if torch.backends.mps.is_available() else "cpu" # MPS (metal performance shaders) for Mac GPUs, else "cpu" 
 # Load the actual model weights and neural network
 model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-tiny").to(device)
 
-# Prepare the model for LoRA-compatible 8-bit training (freezing norms, casting types)
-model = prepare_model_for_kbit_training(model)
+#choose fine-tuning mode
+if args.mode == "lora":
+    print("Using LoRA fine-tuning")
 
-# Configure LoRA (Low-Rank Adaptation) for efficient fine-tuning
-config = LoraConfig(
-    r=32,  # Rank of LoRA decomposition
-    lora_alpha=64,  # Scaling factor
-    target_modules=["q_proj", "v_proj"],  # Apply LoRA to attention projections
-    lora_dropout=0.05,  # Dropout applied to LoRA layers
-    bias="none"  # Don't adapt bias terms
-)
+    # Prepare the model for LoRA-compatible 8-bit training (freezing norms, casting types)
+    model = prepare_model_for_kbit_training(model)
 
-# Wrap the base model with LoRA using the above config
-model = get_peft_model(model, config)
-model.print_trainable_parameters()  # Print which parameters are trainable
+    # Configure LoRA (Low-Rank Adaptation) for efficient fine-tuning
+    config = LoraConfig(
+        r=32,  # Rank of LoRA decomposition
+        lora_alpha=64,  # Scaling factor
+        target_modules=["q_proj", "v_proj"],  # Apply LoRA to attention projections
+        lora_dropout=0.05,  # Dropout applied to LoRA layers
+        bias="none"  # Don't adapt bias terms
+    )
+
+    # Wrap the base model with LoRA using the above config
+    model = get_peft_model(model, config)
+    model.print_trainable_parameters()  # Print which parameters are trainable
+else:
+    print("Using full model fine-tuning")
+    # unfreeze all model parameters
+    for param in model.parameters():
+        param.requires_grad = True
+
+    # count trainable parameters manually
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in model.parameters())
+    print(f"Trainable params: {trainable:,} / {total:,} ({100 * trainable / total:.2f}%)")
 
 def compute_metrics(eval_pred):
     predictions, labels = eval_pred
@@ -95,7 +115,7 @@ print(f"Before fine-tuning → Loss: {pre_loss:.4f}, WER: {pre_wer:.3f}")
 trainer.train()
 
 # === Save the model after training ===
-save_dir = "fine_tuned_whisper"
+save_dir = f"fine_tuned_whisper_{args.mode}"
 model.save_pretrained(save_dir)
 processor.save_pretrained(save_dir)
 print(f"Model and processor saved to {save_dir}")
