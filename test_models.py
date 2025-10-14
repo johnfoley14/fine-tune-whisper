@@ -14,7 +14,7 @@ processor = WhisperProcessor.from_pretrained("openai/whisper-tiny")
 data_collator = DataCollatorSpeechSeq2SeqWithPadding(processor=processor)
 
 # === Load test dataset ===
-test_dataset = AudioTextDataset(json_path="processed_dataset/validation.json", processor=processor)
+test_dataset = AudioTextDataset(json_path="processed_dataset/test.json", processor=processor)
 test_loader = torch.utils.data.DataLoader(
     test_dataset,
     batch_size=8,
@@ -73,7 +73,7 @@ print("Loading base Whisper tiny model...")
 base_model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-tiny").to(device)
 
 print("Loading fine-tuned model...")
-ft_model = WhisperForConditionalGeneration.from_pretrained("models/fine_tuned_whisper").to(device)
+ft_model = WhisperForConditionalGeneration.from_pretrained("models/fine_tuned_whisper_full").to(device)
 
 # === Evaluate base model ===
 base_loss, base_wer = evaluate(base_model, test_loader, processor, device, gen_kwargs)
