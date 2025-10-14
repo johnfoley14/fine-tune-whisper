@@ -2,5 +2,6 @@
 processed_dataset
 wandb
 checkpoints
-fine_tuned_whisper
+models/
 __pycache__
+logs/
