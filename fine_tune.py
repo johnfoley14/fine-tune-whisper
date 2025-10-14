@@ -1,9 +1,9 @@
-from transformers import WhisperProcessor, WhisperForConditionalGeneration, Seq2SeqTrainingArguments, Seq2SeqTrainer
+from transformers import WhisperProcessor, WhisperForConditionalGeneration, Seq2SeqTrainingArguments, Seq2SeqTrainer, GenerationConfig
 from peft import get_peft_model, LoraConfig, prepare_model_for_kbit_training
 import wandb, torch, argparse
+from jiwer import wer
 from data_collator import DataCollatorSpeechSeq2SeqWithPadding
 from prepare_dataset import AudioTextDataset
-from test_utils import evaluate_model
 
 # parse cmd line args
 parser = argparse.ArgumentParser(description="Fine-tune Whisper model with LoRA or full finetuning")
@@ -23,31 +23,32 @@ wandb.init(
 
 # Define training hyperparameters and settings
 training_args = Seq2SeqTrainingArguments(
-    output_dir="checkpoints",  # Directory to save model checkpoints
-    per_device_train_batch_size=1,  # Batch size per GPU, adjust as required
-    gradient_accumulation_steps=8,  # Accumulate gradients for effective batch size, adjust as required
-    learning_rate=1e-5,  # Learning rate
-    warmup_steps=100,  # Number of warmup steps for learning rate scheduler,
-    # max_steps=10, # Override num_train_epochs for a quick test run (REMOVE THIS LINE FOR ACTUAL TRAINING)
-    num_train_epochs=3,  # Total number of training epochs
-    eval_strategy="steps",  # Evaluate every few steps
-    logging_strategy="steps",  # Log every few steps
-    logging_first_step=True,  # Log the very first training step
-    logging_nan_inf_filter=False,  # Don’t filter NaN/inf in logs
-    eval_steps=500,  # Run evaluation every 500 steps
+    output_dir="checkpoints",
+    per_device_train_batch_size=4,
+    per_device_eval_batch_size=4,
+    gradient_accumulation_steps=2,
+    eval_strategy="steps",
+    eval_steps=50,
+    logging_steps=25,
+    save_strategy="steps",
+    save_steps=100,
+    num_train_epochs=8,   # reduce epochs for small dataset
+    learning_rate=4e-5,
+    warmup_steps=50,
+    save_total_limit=2,
     report_to=["wandb"],  # Log metrics to Weights & Biases
-    fp16=False,  # Use mixed-precision (FP16) training
-    bf16=False,  # Use mixed-precision (FP16) training --- IGNORE --- NOT ALL GPUS SUPPORT BF16
-    per_device_eval_batch_size=1,  # Batch size for evaluation
-    generation_max_length=128,  # Max length for generation during eval
-    logging_steps=10,  # Log every 10 steps
-    remove_unused_columns=False,  # Needed for PEFT since forward signature is modified
-    label_names=["labels"],  # Tells Trainer to pass labels explicitly
+    fp16=False,
+    bf16=True,
+    predict_with_generate=True,
+    logging_dir="./logs",
+    load_best_model_at_end=True,
+    metric_for_best_model="wer",
+    generation_max_length=128,
 )
 
 device = "mps" if torch.backends.mps.is_available() else "cpu" # MPS (metal performance shaders) for Mac GPUs, else "cpu" 
 # Load the actual model weights and neural network
-model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-tiny").to(device)
+model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-tiny")
 
 #choose fine-tuning mode
 if args.mode == "lora":
@@ -67,7 +68,6 @@ if args.mode == "lora":
 
     # Wrap the base model with LoRA using the above config
     model = get_peft_model(model, config)
-    model.print_trainable_parameters()  # Print which parameters are trainable
 else:
     print("Using full model fine-tuning")
     # unfreeze all model parameters
@@ -79,47 +79,67 @@ else:
     total = sum(p.numel() for p in model.parameters())
     print(f"Trainable params: {trainable:,} / {total:,} ({100 * trainable / total:.2f}%)")
 
-def compute_metrics(eval_pred):
-    predictions, labels = eval_pred
-    return {"eval_loss": trainer.evaluate()["eval_loss"]}
+DEFAULT_GEN_KWARGS = {
+    "max_length": 128,
+    "num_beams": 3,
+    "no_repeat_ngram_size": 2,
+    "repetition_penalty": 1.5,
+    "length_penalty": 1.0,
+    "do_sample": False,
+}
 
-# Initialize Hugging Face Trainer for training and evaluation
+forced_decoder_ids = processor.get_decoder_prompt_ids(language="en", task="transcribe")
+
+model.print_trainable_parameters()
+model.config.use_cache = False  # Disable caching during training
+model.generation_config = GenerationConfig(
+    max_length=128,
+    num_beams=3,
+    no_repeat_ngram_size=2,
+    repetition_penalty=1.5,
+    length_penalty=1.0,
+    do_sample=False,
+    forced_decoder_ids=forced_decoder_ids,
+    decoder_start_token_id=processor.tokenizer.convert_tokens_to_ids("<|startoftranscript|>"),
+)
+
+def compute_metrics(pred):
+    labels = pred.label_ids
+    labels[labels == -100] = processor.tokenizer.pad_token_id
+
+    preds = processor.batch_decode(pred.predictions, skip_special_tokens=True)
+    refs = processor.batch_decode(labels, skip_special_tokens=True)
+
+    return {"wer": wer(refs, preds)}
+
+
+# --- Datasets ---
+train_dataset = AudioTextDataset(json_path="processed_dataset/train.json", processor=processor)
+val_dataset   = AudioTextDataset(json_path="processed_dataset/validation.json", processor=processor)
+test_dataset  = AudioTextDataset(json_path="processed_dataset/test.json", processor=processor)
+
 trainer = Seq2SeqTrainer(
     args=training_args,
     model=model,
-    train_dataset=AudioTextDataset(json_path="processed_dataset/train.json", processor=processor),
-    eval_dataset=AudioTextDataset(json_path="processed_dataset/validation.json", processor=processor),
+    train_dataset=train_dataset,
+    eval_dataset=val_dataset,
     data_collator=data_collator,
     compute_metrics=compute_metrics,
-    processing_class=processor.feature_extractor,  # Optional; may be unused
 )
 
-# Disable caching to avoid warnings during training (re-enable for inference)
-model.config.use_cache = False
+# --- Evaluate before training ---
+pre_eval = trainer.evaluate(eval_dataset=test_dataset)
+print(f"Before fine-tuning → Loss: {pre_eval['eval_loss']:.4f}, WER: {pre_eval['eval_wer']:.3f}")
 
-# === Load test dataset ===
-test_dataset = AudioTextDataset(json_path="processed_dataset/test.json", processor=processor)
-
-# Load test dataset and use collator to handle padding
-test_loader = torch.utils.data.DataLoader(
-    test_dataset,
-    batch_size=8,
-    collate_fn=data_collator
-)
-
-# === Evaluate before training ===
-pre_loss, pre_wer = evaluate_model(model, test_loader, processor, device)
-print(f"Before fine-tuning → Loss: {pre_loss:.4f}, WER: {pre_wer:.3f}")
-
-# === Training ===
+# --- Training ---
 trainer.train()
 
 # === Save the model after training ===
-save_dir = f"fine_tuned_whisper_{args.mode}"
+save_dir = f"models/fine_tuned_whisper_{args.mode}"
 model.save_pretrained(save_dir)
 processor.save_pretrained(save_dir)
 print(f"Model and processor saved to {save_dir}")
 
-# === Evaluate after training ===
-post_loss, post_wer = evaluate_model(model, test_loader, processor, device)
-print(f"After fine-tuning → Loss: {post_loss:.4f}, WER: {post_wer:.3f}")
+# --- Evaluate after training ---
+post_eval = trainer.evaluate(eval_dataset=test_dataset)
+print(f"After fine-tuning → Loss: {post_eval['eval_loss']:.4f}, WER: {post_eval['eval_wer']:.3f}")
