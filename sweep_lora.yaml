@@ -1,21 +1,21 @@
 program: fine_tune.py
-method: bayes  # Bayesian optimization for efficient search
+method: bayes
 metric:
-  name: eval_wer  # We want to minimize word error rate, change as required
+  name: eval_wer
   goal: minimize
 
 parameters:
-  # --- Learning rate ---
+  mode:
+    value: lora  # fixed to LoRA fine-tuning
+
   learning_rate:
     distribution: log_uniform_values
     min: 1e-6
     max: 1e-4
 
-  # --- Number of epochs ---
   num_train_epochs:
     values: [4, 6, 8, 10]
 
-  # --- LoRA parameters ---
   lora_rank:
     values: [8, 16, 32]
   lora_alpha:
@@ -23,16 +23,8 @@ parameters:
   lora_dropout:
     values: [0.0, 0.05, 0.1]
 
-  # --- Warmup steps ---
   warmup_steps:
     values: [0, 25, 50, 100]
 
-  # --- Gradient accumulation ---
   gradient_accumulation_steps:
     values: [1, 2, 4]
-
-command:
-  - C:/CS6514_ML_AI/Advanced_AI/assessment/fine-tune-whisper/.venv/Scripts/python.exe
-  - ${program}
-  - --mode
-  - lora

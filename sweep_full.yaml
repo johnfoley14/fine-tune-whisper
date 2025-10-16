@@ -1,0 +1,23 @@
+program: fine_tune.py
+method: bayes
+metric:
+  name: eval_wer
+  goal: minimize
+
+parameters:
+  mode:
+    value: full  # fixed to full fine-tuning
+
+  learning_rate:
+    distribution: log_uniform_values
+    min: 1e-6
+    max: 1e-4
+
+  num_train_epochs:
+    values: [4, 6, 8, 10]
+
+  warmup_steps:
+    values: [0, 25, 50, 100]
+
+  gradient_accumulation_steps:
+    values: [1, 2, 4]

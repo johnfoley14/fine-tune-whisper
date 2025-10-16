@@ -8,7 +8,7 @@ from prepare_dataset import AudioTextDataset
 # parse cmd line args
 parser = argparse.ArgumentParser(description="Fine-tune Whisper model with LoRA or full finetuning")
 parser.add_argument("--mode", choices=["lora", "full"], default="lora", help="Choose 'lora' for LoRA fine-tuning or 'full' for full model fine-tuning")
-args = parser.parse_args()
+args, unknown = parser.parse_known_args()
 
 # Load the processor for feature extraction and tokenization --- feature extractor maps raw audio to mel spectrogram
 processor = WhisperProcessor.from_pretrained("openai/whisper-tiny")
@@ -20,29 +20,40 @@ data_collator = DataCollatorSpeechSeq2SeqWithPadding(processor=processor)
 wandb.init(
     project="whisper",  # Name of the project on wandb
 )
+# use wandb config if available
+mode = getattr(wandb.config, "mode", args.mode)
 
-# Set learning rates and warmup steps based on fine-tuning mode
-learning_rate = 4e-6 if args.mode == "full" else 4e-5
-warmup_steps = 100 if args.mode == "full" else 50
+# Override default hyperparameters with sweep values
+config = wandb.config
+
+learning_rate = config.learning_rate if hasattr(config, "learning_rate") else (4e-6 if mode == "full" else 4e-5)
+num_train_epochs = config.num_train_epochs if hasattr(config, "num_train_epochs") else 8
+warmup_steps = config.warmup_steps if hasattr(config, "warmup_steps") else (100 if mode == "full" else 50)
+gradient_accumulation_steps = config.gradient_accumulation_steps if hasattr(config, "gradient_accumulation_steps") else 2
+
+# LoRA params
+lora_rank = config.lora_rank if hasattr(config, "lora_rank") else 32
+lora_alpha = config.lora_alpha if hasattr(config, "lora_alpha") else 64
+lora_dropout = config.lora_dropout if hasattr(config, "lora_dropout") else 0.05
 
 # Define training hyperparameters and settings
 training_args = Seq2SeqTrainingArguments(
     output_dir="checkpoints",
     per_device_train_batch_size=4,
     per_device_eval_batch_size=4,
-    gradient_accumulation_steps=2,
+    gradient_accumulation_steps=gradient_accumulation_steps,
     eval_strategy="steps",
     eval_steps=50,
     logging_steps=25,
     save_strategy="steps",
     save_steps=100,
-    num_train_epochs=8,   # reduce epochs for small dataset
+    num_train_epochs=num_train_epochs,
     learning_rate=learning_rate,
     warmup_steps=warmup_steps,
     save_total_limit=2,
-    report_to=["wandb"],  # Log metrics to Weights & Biases
-    fp16=False,
-    bf16=False, # set to True if using compatible GPU
+    report_to=["wandb"],
+    fp16=True,
+    bf16=False,
     predict_with_generate=True,
     logging_dir="./logs",
     load_best_model_at_end=True,
@@ -50,12 +61,11 @@ training_args = Seq2SeqTrainingArguments(
     generation_max_length=128,
 )
 
-device = "mps" if torch.backends.mps.is_available() else "cpu" # MPS (metal performance shaders) for Mac GPUs, else "cpu" 
-# Load the actual model weights and neural network
+device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"  # CUDA for NVIDIA GPUs, MPS for Mac, else CPU
 model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-tiny")
 
 #choose fine-tuning mode
-if args.mode == "lora":
+if mode == "lora":
     print("Using LoRA fine-tuning")
 
     # Prepare the model for LoRA-compatible 8-bit training (freezing norms, casting types)
@@ -63,12 +73,13 @@ if args.mode == "lora":
 
     # Configure LoRA (Low-Rank Adaptation) for efficient fine-tuning
     config = LoraConfig(
-        r=32,  # Rank of LoRA decomposition
-        lora_alpha=64,  # Scaling factor
-        target_modules=["q_proj", "v_proj"],  # Apply LoRA to attention projections
-        lora_dropout=0.05,  # Dropout applied to LoRA layers
-        bias="none"  # Don't adapt bias terms
+        r=lora_rank,
+        lora_alpha=lora_alpha,
+        target_modules=["q_proj", "v_proj"],
+        lora_dropout=lora_dropout,
+        bias="none"
     )
+
     model.config.use_cache = False  # Disable caching during training for LoRA
 
     # Wrap the base model with LoRA using the above config
@@ -125,7 +136,7 @@ trainer = Seq2SeqTrainer(
 )
 
 # Only patch generation in full fine-tuning mode
-if args.mode == "full":
+if mode == "full":
     original_generate = model.generate
 
     def generate_with_forced_ids(*args, **kwargs):
@@ -145,7 +156,7 @@ print(f"Before fine-tuning → Loss: {pre_eval['eval_loss']:.4f}, WER: {pre_eval
 trainer.train()
 
 # === Save the model after training ===
-save_dir = f"models/fine_tuned_whisper_{args.mode}"
+save_dir = f"models/fine_tuned_whisper_{mode}"
 model.save_pretrained(save_dir)
 processor.save_pretrained(save_dir)
 print(f"Model and processor saved to {save_dir}")
