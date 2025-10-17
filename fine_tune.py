@@ -22,27 +22,27 @@ wandb.init(
 )
 
 # Set learning rates and warmup steps based on fine-tuning mode
-learning_rate = 4e-6 if args.mode == "full" else 4e-5
-warmup_steps = 100 if args.mode == "full" else 50
+learning_rate = 2e-5 if args.mode == "full" else 7e-5
+warmup_steps = 50 if args.mode == "full" else 0
 
 # Define training hyperparameters and settings
 training_args = Seq2SeqTrainingArguments(
     output_dir="checkpoints",
     per_device_train_batch_size=4,
     per_device_eval_batch_size=4,
-    gradient_accumulation_steps=2,
+    gradient_accumulation_steps=1,
     eval_strategy="steps",
     eval_steps=50,
     logging_steps=25,
     save_strategy="steps",
     save_steps=100,
-    num_train_epochs=8,   # reduce epochs for small dataset
+    num_train_epochs=6,   # reduce epochs for small dataset
     learning_rate=learning_rate,
     warmup_steps=warmup_steps,
     save_total_limit=2,
     report_to=["wandb"],  # Log metrics to Weights & Biases
     fp16=False,
-    bf16=True,
+    bf16=False,
     predict_with_generate=True,
     logging_dir="./logs",
     load_best_model_at_end=True,
@@ -64,9 +64,9 @@ if args.mode == "lora":
     # Configure LoRA (Low-Rank Adaptation) for efficient fine-tuning
     config = LoraConfig(
         r=32,  # Rank of LoRA decomposition
-        lora_alpha=64,  # Scaling factor
+        lora_alpha=32,  # Scaling factor
         target_modules=["q_proj", "v_proj"],  # Apply LoRA to attention projections
-        lora_dropout=0.05,  # Dropout applied to LoRA layers
+        lora_dropout=0.1,  # Dropout applied to LoRA layers
         bias="none"  # Don't adapt bias terms
     )
     model.config.use_cache = False  # Disable caching during training for LoRA
