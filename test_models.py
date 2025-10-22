@@ -15,8 +15,14 @@ data_collator = DataCollatorSpeechSeq2SeqWithPadding(processor=processor)
 
 # === Load test dataset ===
 test_dataset = AudioTextDataset(json_path="processed_dataset/test.json", processor=processor)
+val_dataset = AudioTextDataset(json_path="processed_dataset/validation.json", processor=processor)
 test_loader = torch.utils.data.DataLoader(
     test_dataset,
+    batch_size=8,
+    collate_fn=data_collator
+)
+val_loader = torch.utils.data.DataLoader(
+    val_dataset,
     batch_size=8,
     collate_fn=data_collator
 )
@@ -73,20 +79,43 @@ print("Loading base Whisper tiny model...")
 base_model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-tiny").to(device)
 
 print("Loading fine-tuned model...")
-ft_model = WhisperForConditionalGeneration.from_pretrained("models/fine_tuned_whisper_full").to(device)
+full_ft_model = WhisperForConditionalGeneration.from_pretrained("models/fine_tuned_whisper_full_20251022-140211").to(device)
+
+print("Loading LoRA model...")
+lora_ft_model = WhisperForConditionalGeneration.from_pretrained("models/fine_tuned_whisper_lora_20251022-141355").to(device)
 
 # === Evaluate base model ===
-base_loss, base_wer = evaluate(base_model, test_loader, processor, device, gen_kwargs)
-print(f"Base Whisper Tiny → Loss: {base_loss:.4f}, WER: {base_wer:.3f}")
+test_base_loss, test_base_wer = evaluate(base_model, test_loader, processor, device, gen_kwargs)
+print(f"Base Whisper Tiny → Test Loss: {test_base_loss:.4f}, WER: {test_base_wer:.3f}")
+val_base_loss, val_base_wer = evaluate(base_model, val_loader, processor, device, gen_kwargs)
+print(f"Base Whisper Tiny → Val Loss: {val_base_loss:.4f}, WER: {val_base_wer:.3f}")
+
+# === Evaluate full fine-tuned model ===
+ft_loss, ft_wer = evaluate(full_ft_model, test_loader, processor, device, gen_kwargs)
+print(f"Full Fine-tuned Whisper → Test Loss: {ft_loss:.4f}, WER: {ft_wer:.3f}")
+val_ft_loss, val_ft_wer = evaluate(full_ft_model, val_loader, processor, device, gen_kwargs)
+print(f"Full Fine-tuned Whisper → Val Loss: {val_ft_loss:.4f}, WER: {val_ft_wer:.3f}")
 
 # === Evaluate fine-tuned model ===
-ft_loss, ft_wer = evaluate(ft_model, test_loader, processor, device, gen_kwargs)
-print(f"Fine-tuned Whisper → Loss: {ft_loss:.4f}, WER: {ft_wer:.3f}")
+ft_loss, ft_wer = evaluate(lora_ft_model, test_loader, processor, device, gen_kwargs)
+print(f"Lora Fine-tuned Whisper → Test Loss: {ft_loss:.4f}, WER: {ft_wer:.3f}")
+val_ft_loss, val_ft_wer = evaluate(lora_ft_model, val_loader, processor, device, gen_kwargs)
+print(f"Lora Fine-tuned Whisper → Val Loss: {val_ft_loss:.4f}, WER: {val_ft_wer:.3f}")
 
 # === Evaluate base model with different gen_kwargs ===
-base_loss, base_wer = evaluate(base_model, test_loader, processor, device, gen_kwargs2)
-print(f"Base Whisper Tiny with different gen_kwargs → Loss: {base_loss:.4f}, WER: {base_wer:.3f}")
+test_base_loss, test_base_wer = evaluate(base_model, test_loader, processor, device, gen_kwargs2)
+print(f"Base Whisper Tiny → Test Loss with different gen_kwargs: {test_base_loss:.4f}, WER: {test_base_wer:.3f}")
+val_base_loss, val_base_wer = evaluate(base_model, val_loader, processor, device,   gen_kwargs2)
+print(f"Base Whisper Tiny → Val Loss with different gen_kwargs: {val_base_loss:.4f}, WER: {val_base_wer:.3f}")
 
 # === Evaluate fine-tuned model with different gen_kwargs ===
-ft_loss, ft_wer = evaluate(ft_model, test_loader, processor, device, gen_kwargs2)
-print(f"Fine-tuned Whisper with different gen_kwargs → Loss: {ft_loss:.4f}, WER: {ft_wer:.3f}")
+ft_loss, ft_wer = evaluate(full_ft_model, test_loader, processor, device, gen_kwargs2)
+print(f"Full Fine-tuned Whisper with different gen_kwargs → Loss: {ft_loss:.4f}, WER: {ft_wer:.3f}")
+val_ft_loss, val_ft_wer = evaluate(full_ft_model, val_loader, processor, device, gen_kwargs2)
+print(f"Full Fine-tuned Whisper with different gen_kwargs → Val Loss: {val_ft_loss:.4f}, WER: {val_ft_wer:.3f}")
+
+# === Evaluate fine-tuned model with different gen_kwargs ===
+ft_loss, ft_wer = evaluate(lora_ft_model, test_loader, processor, device, gen_kwargs2)
+print(f"Lora Fine-tuned Whisper with different gen_kwargs → Loss: {ft_loss:.4f}, WER: {ft_wer:.3f}")
+val_ft_loss, val_ft_wer = evaluate(lora_ft_model, val_loader, processor, device, gen_kwargs2)
+print(f"Lora Fine-tuned Whisper with different gen_kwargs → Val Loss: {val_ft_loss:.4f}, WER: {val_ft_wer:.3f}")

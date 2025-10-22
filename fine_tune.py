@@ -18,7 +18,7 @@ data_collator = DataCollatorSpeechSeq2SeqWithPadding(processor=processor)
 
 # Initialize Weights & Biases for experiment tracking
 wandb.init(
-    project="whisper",  # Name of the project on wandb
+    project="whisper-fine-tune",  # Name of the project on wandb
 )
 
 # Set learning rates and warmup steps based on fine-tuning mode
@@ -123,19 +123,6 @@ trainer = Seq2SeqTrainer(
     compute_metrics=compute_metrics,
     tokenizer=processor.feature_extractor,
 )
-
-# Only patch generation in full fine-tuning mode
-if args.mode == "full":
-    original_generate = model.generate
-
-    def generate_with_forced_ids(*args, **kwargs):
-        kwargs.update(DEFAULT_GEN_KWARGS)
-        kwargs.setdefault("forced_decoder_ids", forced_decoder_ids)
-        kwargs.setdefault("decoder_start_token_id", decoder_start_token_id)
-        return original_generate(*args, **kwargs)
-
-    model.generate = generate_with_forced_ids
-
 
 # --- Evaluate before training ---
 pre_eval = trainer.evaluate(eval_dataset=test_dataset)
